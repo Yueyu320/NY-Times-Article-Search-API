@@ -1,0 +1,289 @@
+---
+title: "Sta 523 - Midterm Project 2 - Fall 2021"
+output: rmarkdown::html_document
+runtime: shiny
+---
+Due Friday, December 3rd by 5:00 pm
+
+<br/>
+
+```{r}
+library(httr2)
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(jsonlite)
+```
+
+### Rules
+
+Review all of the rules detailed in `README.md`, if you have any questions please direct them to myself or the TAs.
+
+<br/>
+
+### Task 1 - Figuring out the NY Times Article Search API
+
+```
+https://api.nytimes.com/svc/search/v2/articlesearch.json?begin_date=20170320&end_date=20170320&fq=document_type:article AND print_page:1 AND print_section:A&api-key=ArnUwKjBjy3thjTpL7qOxgCWg5CADuK4
+```
+
+* `begin_date=20170320` Results only contain documents published begin on 03/20/2017
+
+* `end_date=20170320` Results only contain documents published end on 03/20/2017
+
+* `fq=document_type:article AND print_page:1 AND print_section:A` Results only 
+contain article type documents from the front page of the paper
+
+<br/>    
+
+### Task 2 - Getting data from the NY Times Article Search API
+
+The function includes three parts: 1. basic sanity check for users' inputs, 2. get
+url using users' inputs, 3. extract necessary information from url responses. 
+
+For basic sanity check, all inputs except for api_key need to be in the integer 
+type (decimals are not accepted), the length for all inputs has to be 1, month 
+has to be between 1 and 12 and day has to be between 1 and 31. For getting urls, 
+month and day must have 2 digits, so if month or day is less than 10, I added 
+another 0 in front of users' inputs and transferred them into string type. By pasting
+all of the inputs and basic url components together, I got the actual url link for
+articles, then I used `read_json` function to read responses for each url link.
+For extracting necessary information from the responses, at first, I got the number
+of articles using the number of hits to decide the number of requests I need to 
+make. So I wrote three `if` conditions: 1. the number of articles is 0, 2. the
+number of articles is less than or equal to 10, 3. the number of articles is 
+greater than or equal to 11. If the number of articles is 0, empty data frame 
+with the columns' names is returned since there is no article. If the number of 
+articles is less than or equal to 10, then there is only 1 page so that the number
+of requests is 1 and there is no need for looping pages. For storing information
+to the data frame part, I first used `tibble` function to store all documents in 
+the list type, then I used `unnest_wider` function to expand columns for all 
+documents and used `select` function to select necessary information for articles.
+Then, all expanded information is stored into a data frame and is returned. If
+the number of articles is greater than or equal to 11, the number of pages/requests
+could be calculated as the number of articles divided by 10 since 1 page contains
+10 articles at most. And the number of requests is the number of times we need to
+loop through using `page` parameter in the `fq` argument. And for each loop, the
+page parameter is updated by adding 1 until it is greater than the actual number 
+of pages (utilizing while loop). And all data frames are merged using `rbind` to
+get the completed data frame for all articles. Because there is the rate limit for
+requesting, after each loop, the system will sleep for 6 seconds by using `Sys.sleep`.
+
+```{r}
+get_nyt_articles = function(year, month, day, api_key) {
+  #inputs except for key have to be integers
+  if (year %% 1 != 0 | month %% 1 != 0 | day %% 1 != 0 ){
+    stop("Month, year and day have to be in the interger type!")
+  }
+  #function can only handle 1 input
+  if (length(month) > 1 | length(year) > 1 | length(day) > 1 | length(api_key) > 1) {
+    stop("Month, year and api_key couldn't handle more than one input!")
+  }
+  #month has to be between 1 and 12
+  if (!(month >= 1) | !(month <= 12)) {
+    stop("Month has to be between 1 and 12!")
+  }
+  #day has to be between 1 and 31
+  if (!(day >= 1) | !(day <= 31)) {
+    stop("Day has to be between 1 and 31!")
+  }
+  #if month is less than 10, need to add another 0 in front of it (change to string type)
+  if (month < 10) {
+    month <- paste0(0, month)
+  }
+  #if day is less than 10, need to add another 0 in front of it (change to string type)
+  if (day < 10) {
+    day <- paste0(0, day)
+  }
+  #paste all inputs together to get actual API 
+  API <- paste0("https://api.nytimes.com/svc/search/v2/articlesearch.json?begin_date=", year, month, day, "&end_date=", year, month, day, "&fq=document_type:article AND print_page:1 AND print_section:A&api-key=",
+               api_key)
+  #pass the API to read_json function to get the actual input 
+  input <- read_json(API)
+  #get the number of hits (how many requests we need to request)
+  num <- input$response$meta$hits
+  #create an empty dataframe to store output later
+  data <- data.frame()
+  #if the number of hits is 0, there is no article, so return empty data frame with columns' names
+  if (num == 0) {
+    return(data.frame(headline=NA, byline=NA, web_url=NA, lead_paragraph=NA, source=NA))
+  }
+  #if the number of hits is less than 10, there is only 1 page of articles, so request API for only one time
+  if (num <= 10) {
+    data <- tibble::tibble(docs = input$response$docs) %>%
+      unnest_wider(docs) %>%
+      select(headline, byline, web_url, lead_paragraph, source)
+    return(data)
+  }
+  #if the number of hits is greater than 10, there are more than 1 page of articles, so make multiple requests 
+  #the number of hits divided by 10 is the number of page we need to request 
+  if (num >= 11) {
+    page <- ceiling(num/10)
+    #initial number of page
+    i <- 0
+    #loop until we get all articles 
+    while(i < page) {
+      #change the `page` query every time when requesting the next page 
+      API <- paste0("https://api.nytimes.com/svc/search/v2/articlesearch.json?begin_date=", year, month, day, "&end_date=", year, month, day, "&fq=document_type:article AND print_page:1 AND print_section:A&api-key=",
+               api_key, "&page=", i)
+      input <- read_json(API)
+      dataframe <- tibble::tibble(docs = input$response$docs) %>%
+      unnest_wider(docs) %>%
+      select(headline, byline, web_url, lead_paragraph, source)
+      #rbind to include all articles
+      data <- rbind(data, dataframe)
+      i <- i + 1
+      #to avoid exceeding rate limit, for every time requesting the next page, make the system sleep for 6 seconds
+      Sys.sleep(6)
+    }
+  return(data) 
+  }
+}
+```
+
+<br/>
+
+### Task 3 - Shiny Front End
+
+To let users choose the date they want to search on, I created `dateInput`, 
+`textInput` and `actionButton` as inputs. For `dateInput`, users could choose
+any date they want, and for `textInput`, users need to type their own api_key
+to have access for requesting articles. For `actionButton`, after selecting the
+date and typing the api_key, users could click the `search` button to look up
+the articles on that date. After collecting information from users, I passed them
+to function `get_nyt_articles` to get a data frame containing all information for
+articles. By creating `observers` and using `destroy` function, existing observers
+could be deleted and we could avoid repeated clicking each time when user click 
+the search button. And if there is no article on that date (data frame is empty),
+only "no articles" message will show to the user. If the data frame is not empty,
+`headline`, `byline`, `lead_paragraph` and `working_link` were extracted and 
+expanded when necessary. By using `map`, `fluidRow` and `actionLink`function, 
+link for each article(headline) was created. Then after users click on the link,
+a window was popped up containing headline, byline as well as the first paragraph 
+using `modelDialog` function. The actual working link for article was also created
+by using `tags` function inside of `modelDialog`. 
+
+```{r}
+library(shiny)
+library(purrr)
+library(shinyWidgets)
+library(shinydashboard)
+
+shinyApp(
+  ui = fluidPage(
+    setBackgroundImage(
+    src = "https://images.unsplash.com/photo-1551803021-acd2b133c879?ixlib=rb-1.2.1&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1770&q=80"
+  ),
+    titlePanel(h3("NYTimes API",
+                  style = "color: white")),
+    sidebarLayout(
+      sidebarPanel(
+        #create a date input to avoid leap year, solar month and lunar month issues 
+        dateInput("date", "Date", min = "1988-01-01", value = "2017-03-20"),
+        #create a text input for users to input their own api_key
+        textInput("api", "API Key", value = "ArnUwKjBjy3thjTpL7qOxgCWg5CADuK4"),
+        #create a button for searching 
+        actionButton("search", "Search", icon = NULL)
+      ),
+      mainPanel(
+        uiOutput("links")
+      )
+    )
+  ),
+ server = function(input, output, session) {
+   #create a data frame including all necessary information using users' inputs (interactive environment)
+   #will be executed only after clicking the search button
+   table <- eventReactive(input$search, {
+     #transfer date input into string type 
+     date <- toString(input$date)
+     #extract year, month and day from date input
+     date_string <- str_split(date, "-")
+     #transfer year, month and day to integer type
+     year <- as.integer(date_string[[1]][1])
+     month <- as.integer(date_string[[1]][2])
+     day <- as.integer(date_string[[1]][3])
+     #get the data frame by using the function from task2
+     input <- get_nyt_articles(year, month, day, input$api)
+   })
+   
+   state = reactiveValues(
+     observers = list()
+    )
+    
+   observeEvent(input$search, {
+     #if the data frame is empty, only "no articles" message will show 
+     if(all(is.na(table()))) {
+       ui_elems = "No articles"
+       output$links = renderUI(fluidPage(ui_elems))
+     }
+     #if the data frame is not empty, articles' headlines with pop links will show
+     else {
+       #select and expand headlines from table() since headline is in the list type
+       #main is the actual title for each article
+       headline <- table() %>% 
+         select(headline) %>% 
+         unnest_wider(headline) %>% 
+         select(main) %>% 
+         pull(main) 
+       #select and expand byline from table() since byline is in the list type
+       #original is the author(s) for each article
+       byline <- table() %>% 
+         select(byline) %>% 
+         unnest_wider(byline) %>% 
+         select(original) %>% 
+         pull(original)
+       lead_paragraph <- table() %>% 
+         select(lead_paragraph) %>% 
+         pull(lead_paragraph)
+       working_link <- table() %>% 
+         select(web_url) %>% 
+         pull(web_url)
+       #the total number of articles 
+       n <- length(headline)
+     
+      # Destroy existing observers
+      for(i in seq_along(state$observers)) {
+        state$observers[[i]]$destroy()
+      }
+      #use map function to create link for each article(headline)
+      ui_elems = map(
+        seq_len(n), 
+        function(i) 
+          fluidRow(actionLink(paste0("link",i), headline[i], style="color: white"))
+      )
+      
+      #output all articles' headlines with the corresponding link
+      output$links = renderUI(
+        fluidPage(ui_elems)
+        )
+      
+      # Reset and create new observers for each of our links
+      state$observers = map(
+        seq_len(n), 
+        function(i) {
+          label = paste0("link",i)
+          #for each link, pop up a window and show headline, byline as well as 
+          #the first paragraph using modelDialog
+          observeEvent(input[[label]], ignoreInit = TRUE, {
+            showModal(modalDialog(
+              h3("Title"),
+              headline[i],
+              h3("Byline"),
+              byline[i],
+              h3("First Paragraph"),
+              lead_paragraph[i],
+              h3("URL"),
+              #include a working link for each article 
+              tags$div("Refer to documentation", 
+                       tags$a(target="_blank", href = working_link[i], "here"))
+      ))
+          })
+        }
+      )
+     }
+    }
+    )
+  }
+)
+```
