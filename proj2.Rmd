@@ -1,11 +1,8 @@
 ---
-title: "Sta 523 - Midterm Project 2 - Fall 2021"
+title: "NY Times Article Search API"
 output: rmarkdown::html_document
 runtime: shiny
 ---
-Due Friday, December 3rd by 5:00 pm
-
-<br/>
 
 ```{r}
 library(httr2)
@@ -15,12 +12,6 @@ library(dplyr)
 library(ggplot2)
 library(jsonlite)
 ```
-
-### Rules
-
-Review all of the rules detailed in `README.md`, if you have any questions please direct them to myself or the TAs.
-
-<br/>
 
 ### Task 1 - Figuring out the NY Times Article Search API
 
